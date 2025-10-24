@@ -22,18 +22,16 @@ class PaymentScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final paystack = PaystackPayment(secretKey: 'sk_test_key');
+    const paystack = PaystackPayment();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Paystack Payment Demo')),
       body: Center(
         child: ElevatedButton(
           onPressed: () {
-            paystack.pay(
+            paystack.checkout(
               context: context,
-              email: 'user@example.com',
-              amount: 1000.00,
-              currency: 'NGN',
+              accessCode: 'ACCESS_CODE_FROM_SERVER',
               onSuccess: (response) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(

@@ -1,65 +1,69 @@
 # Paystack Payment for Flutter
 
-A Flutter package to integrate Paystack payments into your app with support for multiple payment channels, custom metadata, and split payments. This package uses Paystack’s Checkout API to provide a seamless payment experience via a WebView.
+A Flutter helper for completing Paystack Standard Checkout flows inside a resilient in-app WebView. Hand it an access code from your backend and it keeps the payment UI alive while customers hop between your app, their bank app, USSD, or transfer steps.
 
 ## Features
 
-- **Simple Payment Integration**: Initialize and process payments with minimal setup.
-- **Payment Channels**: Restrict payments to specific channels (e.g., `card`, `bank`, `ussd`).
-- **Custom Metadata**: Attach additional data to transactions (e.g., order IDs).
-- **Split Payments**: Split transaction amounts between your account and subaccounts.
-- **Consistent Responses**: Handle success, error.ConcurrentModificationException, and cancel outcomes with a unified `PaystackResponse` model.
-- **WebView-Based Checkout**: Displays Paystack’s payment UI securely within your app.
+- **Access Code Checkout** – Skip client-side initialization: just pass the access code returned by your server.
+- **Multi-channel Ready** – Card, bank transfer, and USSD are all supported through Paystack’s hosted checkout.
+- **Resilient WebView** – External app launches (banking apps, dialers) no longer close the WebView on return.
+- **Unified Responses** – Receive consistent success, cancel, and error callbacks with `PaystackResponse`.
+- **Customizable UI** – Override title and colors via `PaystackCheckoutOptions`.
 
 ## Installation
 
-### Add to Your Project
-
-### Add to `pubspec.yaml`:
+Add the dependency to `pubspec.yaml` and fetch packages:
 
 ```yaml
-paystack_payment: latest version
+dependencies:
+  paystack_payment: ^1.0.0
 ```
 
-Run `flutter pub get`
+```bash
+flutter pub get
+```
 
-### Import in Dart File:
+Import where needed:
 
 ```dart
 import 'package:paystack_payment/paystack_payment.dart';
 ```
 
-### Example Usage
-
+## Usage
 
 ```dart
-    final paystack = PaystackPayment(secretKey: 'sk_test_key');
-    paystack.pay(
-              context: context,
-              email: 'user@example.com',
-              amount: 1000.00,
-              currency: 'NGN',
-              onSuccess: (response) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Success: ${response.code} - ${response.message} (Ref: ${response.reference})',
-                    ),
-                  ),
-                );
-              },
-              onError: (response) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Error: ${response.message}')),
-                );
-              },
-              onCancel: (response) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Cancelled: ${response.message}')),
-                );
-              },
-            );
+const paystack = PaystackPayment();
+
+await paystack.checkout(
+  context: context,
+  // Obtain this access code securely from your backend after calling
+  // Paystack's initialization endpoint.
+  accessCode: 'ACCESS_CODE_FROM_SERVER',
+  onSuccess: (response) {
+    // Verify the transaction on your backend before fulfilling the order.
+    debugPrint('Payment success: ${response.reference}');
+  },
+  onCancel: (response) {
+    debugPrint('Payment cancelled by customer');
+  },
+  onError: (response) {
+    debugPrint('Payment failed: ${response.message}');
+  },
+  options: const PaystackCheckoutOptions(
+    title: 'Complete your payment',
+    // successUrl: 'https://example.com/paystack-success',
+    // cancelUrl: 'https://example.com/paystack-cancel',
+  ),
+);
 ```
 
-## Additional information
-Visit the paystack documentation for [more information](https://paystack.com/docs/api/transaction)
+Your backend remains responsible for:
+
+1. Initializing the transaction with Paystack.
+2. Supplying the access code (or hosted authorization URL) to the app.
+3. Verifying the payment once the SDK reports success.
+
+## Additional Information
+
+- Paystack documentation: [https://paystack.com/docs/api/transaction](https://paystack.com/docs/api/transaction)
+- For support or issues, open a ticket on the [GitHub issue tracker](https://github.com/Bolxtineltd/paystack_payment/issues).

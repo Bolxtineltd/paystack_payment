@@ -1,116 +1,32 @@
 import 'dart:developer';
+
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+
 import 'paystack_response.dart';
 
 class PaystackPayment {
-  final String secretKey;
+  const PaystackPayment();
 
-  PaystackPayment({required this.secretKey});
-
-  Future<void> pay({
+  Future<void> checkout({
     required BuildContext context,
-    required String email,
-    required double amount,
-    required String currency,
-    String? reference,
-    String? callbackUrl,
-    List<String>? channels,
-    Map<String, dynamic>? metadata,
-    required Function(PaystackResponse) onSuccess,
-    required Function(PaystackResponse) onError,
-    required Function(PaystackResponse) onCancel,
+    required String accessCode,
+    required ValueChanged<PaystackResponse> onSuccess,
+    required ValueChanged<PaystackResponse> onError,
+    required ValueChanged<PaystackResponse> onCancel,
+    PaystackCheckoutOptions options = const PaystackCheckoutOptions(),
   }) async {
-    try {
-      final response = await _initializeTransaction(
-        email: email,
-        amount: amount,
-        currency: currency,
-        reference: reference,
-        callbackUrl: callbackUrl,
-        channels: channels,
-        metadata: metadata,
-      );
+    final initialUrl =
+        options.authorizationUrl ?? 'https://checkout.paystack.com/$accessCode';
 
-      if (response['status'] == true) {
-        final authorizationUrl = response['data']['authorization_url'];
-        _showPaymentWebView(
-          context: context,
-          url: authorizationUrl,
-          onSuccess: onSuccess,
-          onError: onError,
-          onCancel: onCancel,
-        );
-      } else {
-        onError(
-          PaystackResponse.error(
-            'Failed to initialize transaction: ${response['message']}',
-          ),
-        );
-      }
-    } catch (e) {
-      onError(PaystackResponse.error('Error: $e'));
-    }
-  }
-
-  Future<Map<String, dynamic>> _initializeTransaction({
-    required String email,
-    required double amount,
-    required String currency,
-    String? reference,
-    String? callbackUrl,
-    List<String>? channels,
-    Map<String, dynamic>? metadata,
-  }) async {
-    final url = Uri.parse('https://api.paystack.co/transaction/initialize');
-    final headers = {
-      'Authorization': 'Bearer $secretKey',
-      'Content-Type': 'application/json',
-    };
-
-    final mergedMetadata = _mergeMetadata(metadata);
-
-    final body = jsonEncode({
-      'email': email,
-      'amount': (amount * 100).toInt(),
-      'currency': currency,
-      if (reference != null) 'reference': reference,
-      if (callbackUrl != null) 'callback_url': callbackUrl,
-      if (channels != null) 'channels': channels,
-      'metadata': mergedMetadata,
-    });
-
-    log('Sending to Paystack: $body');
-    final response = await http.post(url, headers: headers, body: body);
-    log('Paystack response: ${response.body}');
-    return jsonDecode(response.body);
-  }
-
-  Map<String, dynamic> _mergeMetadata(Map<String, dynamic>? userMetadata) {
-    final defaultMetadata = {
-      'cancel_action': 'https://www.bolxtine.com/?status=cancelled',
-    };
-    if (userMetadata == null) {
-      return defaultMetadata;
-    }
-    return {...defaultMetadata, ...userMetadata};
-  }
-
-  void _showPaymentWebView({
-    required BuildContext context,
-    required String url,
-    required Function(PaystackResponse) onSuccess,
-    required Function(PaystackResponse) onError,
-    required Function(PaystackResponse) onCancel,
-  }) {
-    Navigator.push(
-      context,
+    await Navigator.of(context).push(
       MaterialPageRoute(
+        fullscreenDialog: true,
         builder:
-            (context) => _PaystackWebView(
-              url: url,
+            (_) => _PaystackWebView(
+              initialUrl: initialUrl,
+              options: options,
               onSuccess: onSuccess,
               onError: onError,
               onCancel: onCancel,
@@ -120,25 +36,46 @@ class PaystackPayment {
   }
 }
 
+class PaystackCheckoutOptions {
+  final String? authorizationUrl;
+  final String? successUrl; // <-- merchant callback for success
+  final String? cancelUrl; // <-- merchant callback for cancel
+  final String title;
+  final Color appBarBackgroundColor;
+  final Color appBarForegroundColor;
+
+  const PaystackCheckoutOptions({
+    this.authorizationUrl,
+    this.successUrl,
+    this.cancelUrl,
+    this.title = 'Pay with Paystack',
+    this.appBarBackgroundColor = const Color(0xFF673AB7),
+    this.appBarForegroundColor = Colors.white,
+  });
+}
+
 class _PaystackWebView extends StatefulWidget {
-  final String url;
-  final Function(PaystackResponse) onSuccess;
-  final Function(PaystackResponse) onError;
-  final Function(PaystackResponse) onCancel;
+  final String initialUrl;
+  final PaystackCheckoutOptions options;
+  final ValueChanged<PaystackResponse> onSuccess;
+  final ValueChanged<PaystackResponse> onError;
+  final ValueChanged<PaystackResponse> onCancel;
 
   const _PaystackWebView({
-    required this.url,
+    required this.initialUrl,
+    required this.options,
     required this.onSuccess,
     required this.onError,
     required this.onCancel,
   });
 
   @override
-  _PaystackWebViewState createState() => _PaystackWebViewState();
+  State<_PaystackWebView> createState() => _PaystackWebViewState();
 }
 
 class _PaystackWebViewState extends State<_PaystackWebView> {
   late final WebViewController _controller;
+  bool _completed = false;
 
   @override
   void initState() {
@@ -148,109 +85,226 @@ class _PaystackWebViewState extends State<_PaystackWebView> {
           ..setJavaScriptMode(JavaScriptMode.unrestricted)
           ..setNavigationDelegate(
             NavigationDelegate(
-              onPageStarted: (url) {
-                // log('Page started: $url');
-              },
-              onPageFinished: (url) async {
-                // log('Page finished: $url');
-                final uri = Uri.parse(url);
-
-                if (uri.queryParameters.containsKey('reference')) {
-                  final reference =
-                      uri.queryParameters['reference'] ?? 'unknown';
-                  // log('Success detected with reference: $reference');
-                  widget.onSuccess(PaystackResponse.success(reference));
-                  Navigator.pop(context);
-                } else if (url.contains('cancel') ||
-                    url.contains('status=cancelled')) {
-                  // log('Cancel detected in URL');
-                  widget.onCancel(PaystackResponse.cancelled());
-                  Navigator.pop(context);
-                } else {
-                  // log('No success or cancel condition met for URL: $url');
-                }
-
-                await _injectCancelListener();
-              },
-              onNavigationRequest: (request) {
-                log('Navigation request: ${request.url}');
-                final uri = Uri.parse(request.url);
-
-                if (uri.queryParameters.containsKey('reference')) {
-                  final reference =
-                      uri.queryParameters['reference'] ?? 'unknown';
-                  log(
-                    'Success detected in navigation with reference: $reference',
-                  );
-                  widget.onSuccess(PaystackResponse.success(reference));
-                  Navigator.pop(context);
-                  return NavigationDecision.prevent;
-                } else if (request.url.contains('cancel') ||
-                    request.url.contains('status=cancelled')) {
-                  log('Cancel detected in navigation');
-                  widget.onCancel(PaystackResponse.cancelled());
-                  Navigator.pop(context);
-                  return NavigationDecision.prevent;
-                }
-
-                return NavigationDecision.navigate;
-              },
-              onWebResourceError: (error) {
-                log('WebView error: ${error.description}');
-                widget.onError(
-                  PaystackResponse.error('WebView error: ${error.description}'),
-                );
-                Navigator.pop(context);
-              },
+              onNavigationRequest: _handleNavigationRequest,
+              onPageFinished: _handlePageFinished,
+              onWebResourceError: _handleWebResourceError,
             ),
           )
-          ..loadRequest(Uri.parse(widget.url));
+          ..loadRequest(Uri.parse(widget.initialUrl));
   }
 
-  Future<void> _injectCancelListener() async {
-    const jsCode = '''
-      (function() {
-        var cancelButton = document.querySelector('button[data-testid="cancel-payment"]') || 
-                          document.querySelector('button.cancel-button') || 
-                          document.querySelector('a[href*="cancel"]');
-        if (cancelButton) {
-          cancelButton.addEventListener('click', function() {
-            window.flutter_inappwebview.callHandler('cancelPayment');
-          });
-        }
-      })();
-    ''';
-    await _controller.runJavaScript(jsCode);
+  // -------------------------------------------------------------------------
+  //  Navigation handling
+  // -------------------------------------------------------------------------
+  Future<NavigationDecision> _handleNavigationRequest(
+    NavigationRequest request,
+  ) async {
+    if (!request.isMainFrame) return NavigationDecision.navigate;
 
-    _controller.addJavaScriptChannel(
-      'cancelPayment',
-      onMessageReceived: (args) {
-        log('Cancel triggered via JavaScript');
-        widget.onCancel(PaystackResponse.cancelled());
-        Navigator.pop(context);
-      },
-    );
+    final uri = _tryParseUri(request.url);
+    if (uri == null) return NavigationDecision.navigate;
+
+    // External schemes (mailto:, tel:, …) → open externally
+    if (!_isWebScheme(uri.scheme)) {
+      await _launchExternal(uri);
+      return NavigationDecision.prevent;
+    }
+
+    // Terminal-state detection – if true we **prevent** further navigation
+    final terminal = _checkTerminal(uri);
+    if (terminal) return NavigationDecision.prevent;
+
+    return NavigationDecision.navigate;
   }
 
+  void _handlePageFinished(String url) {
+    final uri = _tryParseUri(url);
+    if (uri != null) _checkTerminal(uri);
+  }
+
+  void _handleWebResourceError(WebResourceError error) {
+    log('WebView error: ${error.errorCode} - ${error.description}');
+    if (error.isForMainFrame == true) {
+      widget.onError(
+        PaystackResponse.error('WebView error: ${error.description}'),
+      );
+    }
+  }
+
+  Future<void> _launchExternal(Uri uri) async {
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched) {
+      widget.onError(
+        PaystackResponse.error(
+          'Unable to open external application needed to complete payment.',
+        ),
+      );
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  //  Terminal-state detection
+  // -------------------------------------------------------------------------
+  bool _checkTerminal(Uri uri) {
+    if (_completed) return true;
+
+    // 1. Explicit merchant URLs supplied by the caller
+    if (widget.options.successUrl != null &&
+        _urlStartsWith(uri, widget.options.successUrl!)) {
+      final ref = _extractReference(uri) ?? 'unknown';
+      _completeWith(widget.onSuccess, PaystackResponse.success(ref));
+      return true;
+    }
+
+    if (widget.options.cancelUrl != null &&
+        _urlStartsWith(uri, widget.options.cancelUrl!)) {
+      _completeWith(widget.onCancel, PaystackResponse.cancelled());
+      return true;
+    }
+
+    // 2. Paystack-hosted success / cancel pages
+    if (_isPaystackHost(uri.host)) {
+      // Success
+      if (_isSuccessUri(uri)) {
+        final ref = _extractReference(uri) ?? 'unknown';
+        _completeWith(widget.onSuccess, PaystackResponse.success(ref));
+        return true;
+      }
+
+      // Cancel / failure
+      if (_isCancelUri(uri)) {
+        _completeWith(widget.onCancel, PaystackResponse.cancelled());
+        return true;
+      }
+
+      // No explicit status → still on Paystack domain → keep loading
+      return false;
+    }
+
+    // 3. ANY navigation **away** from Paystack is considered a terminal callback.
+    //    Paystack redirects to the merchant URL *without* query parameters.
+    final ref = _extractReference(uri) ?? 'unknown';
+    _completeWith(widget.onSuccess, PaystackResponse.success(ref));
+    return true;
+  }
+
+  void _completeWith(
+    ValueChanged<PaystackResponse> callback,
+    PaystackResponse response,
+  ) {
+    if (_completed || !mounted) return;
+    _completed = true;
+    callback(response);
+    Navigator.of(context).pop();
+  }
+
+  // -------------------------------------------------------------------------
+  //  UI
+  // -------------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.deepPurple,
-        title: const Text(
-          'Pay with Paystack',
-          style: TextStyle(fontSize: 20, color: Colors.white),
+    return WillPopScope(
+      onWillPop: () async {
+        _completeWith(widget.onCancel, PaystackResponse.cancelled());
+        return false;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          backgroundColor: widget.options.appBarBackgroundColor,
+          foregroundColor: widget.options.appBarForegroundColor,
+          title: Text(
+            widget.options.title,
+            style: Theme.of(context).textTheme.titleSmall!.copyWith(color: Colors.white),
+          ),
+          titleTextStyle: TextStyle(),
+          leading: IconButton(
+            icon: const Icon(Icons.close),
+            onPressed:
+                () => _completeWith(
+                  widget.onCancel,
+                  PaystackResponse.cancelled(),
+                ),
+          ),
         ),
-        leading: IconButton(
-          icon: const Icon(Icons.close, color: Colors.white),
-          onPressed: () {
-            log('Manual close triggered');
-            widget.onCancel(PaystackResponse.cancelled());
-            Navigator.pop(context);
-          },
-        ),
+        body: WebViewWidget(controller: _controller),
       ),
-      body: WebViewWidget(controller: _controller),
     );
+  }
+
+  // -------------------------------------------------------------------------
+  //  Helpers
+  // -------------------------------------------------------------------------
+  bool _isWebScheme(String? scheme) =>
+      scheme != null && (scheme == 'http' || scheme == 'https');
+
+  Uri? _tryParseUri(String value) {
+    try {
+      return Uri.parse(value);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool _urlStartsWith(Uri uri, String pattern) {
+    final lower = pattern.toLowerCase().trim();
+    return uri.toString().toLowerCase().startsWith(lower);
+  }
+
+  bool _isPaystackHost(String host) {
+    final h = host.toLowerCase();
+    return h.endsWith('paystack.co') ||
+        h.endsWith('paystack.com') ||
+        h.contains('.paystack.');
+  }
+
+  String? _extractReference(Uri uri) {
+    final p = uri.queryParameters;
+    return p['reference'] ?? p['trxref'];
+  }
+
+  bool _isSuccessUri(Uri uri) {
+    final status = uri.queryParameters['status']?.toLowerCase();
+    final ref = _extractReference(uri);
+    final path = uri.path.toLowerCase();
+
+    // reference present → Paystack success page
+    if (ref != null && uri.queryParameters.containsKey('reference'))
+      return true;
+
+    // close-frame handling
+    if (ref != null && path.contains('close')) {
+      return status == null || status == 'success';
+    }
+
+    if (ref != null && (status == 'success' || status == 'completed')) {
+      return true;
+    }
+
+    if (ref != null &&
+        uri.queryParameters['message']?.toLowerCase() == 'approved') {
+      return true;
+    }
+
+    return false;
+  }
+
+  bool _isCancelUri(Uri uri) {
+    inspect(uri);
+    final status = uri.queryParameters['status']?.toLowerCase();
+    final path = uri.path.toLowerCase();
+
+    if (_isPaystackHost(uri.host)) {
+      if (status == 'cancelled' || status == 'failed') return true;
+      if (path.contains('cancel')) return true;
+    }
+
+    if (status == 'cancelled' || status == 'failed' || status == 'abandoned') {
+      return true;
+    }
+
+    final msg = uri.queryParameters['message']?.toLowerCase();
+    if (msg == 'cancelled' || msg == 'failed') return true;
+
+    return false;
   }
 }
